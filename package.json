@@ -6,7 +6,12 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "deploy": "hardhat run scripts/deploy.ts --network kasplex"
+    // Run the deployment script via Hardhat (original TS) – kept for reference
+    "deploy:ts": "hardhat run scripts/deploy.ts --network kasplex",
+    // Deploy using our custom raw transaction deployer
+    "deploy": "node scripts/deploy.js",
+    // Start the HTTP server for Heroku
+    "start": "node server.js"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

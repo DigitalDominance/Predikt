@@ -23,7 +23,37 @@ npm run compile
 ```
 
 ## Deploy (Kasplex)
-Set env and run:
+
+This repository ships with two deployment paths:
+
+- **Custom Node.js deployer** (`scripts/deploy.js`): Signs transactions locally and sends them via `eth_sendRawTransaction`. This approach avoids serialization issues seen with the Kasplex RPC. It can also run automatically on Heroku via the provided `server.js`. Use this for production deployments.
+- **Hardhat deploy (TypeScript)** (`scripts/deploy.ts`): Uses Hardhat’s built‑in deployment flow. Kept for reference and testing.
+
+### Deploy using the custom script
+
+Set environment variables and run:
+
+```bash
+# Required
+export RPC_URL="https://rpc.kasplextest.xyz"      # RPC endpoint
+export PRIVATE_KEY="0xYOUR_PRIVATE_KEY"           # Deployer key (0x prefix optional)
+export BOND_TOKEN="0xYourBondErc20"               # ERC‑20 used for bonds
+export FEE_SINK="0xYourTreasuryMultisig"         # Treasury address for fees
+# Optional
+export OWNER="0xOwnerAddress"                     # Owner of the contracts (defaults to deployer)
+export AUTO_DEPLOY_ON_START=true                   # (Heroku) Auto‑deploy on boot
+
+npm install
+npm run compile
+npm run deploy
+```
+
+If you already have deployed contracts and only want to record their addresses, set `ORACLE_ADDRESS_OVERRIDE` and/or `ARBITRATOR_ADDRESS_OVERRIDE`.
+
+### Deploy using the Hardhat script (TS)
+
+You can still use the original script:
+
 ```bash
 export RPC_URL="https://rpc.kasplextest.xyz"
 export PRIVATE_KEY="0xYOUR_PRIVATE_KEY"
@@ -31,7 +61,7 @@ export BOND_TOKEN="0xYourBondErc20"
 export FEE_SINK="0xYourTreasuryMultisig"
 # optional
 export OWNER="0xOwner"
-npm run deploy
+npm run deploy:ts
 ```
 
 ## Using the Oracle
