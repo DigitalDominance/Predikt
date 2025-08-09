@@ -72,15 +72,21 @@ async function withQueueRetries(fn, label) {
   }
 }
 
-// Wait until the txpool queue for the account empties out
+// Wait until the txpool queue for the account empties out. Uses either
+// the custom provider (globalProvider) or Hardhat’s provider if none is
+// defined. We cannot rely on hre.ethers.provider directly because some
+// RPCs (e.g. kasplex) return 502 for net_version and Hardhat will throw.
+let globalProvider;
+
 async function waitForQueue(addr, maxMs = 120000) {
   const start = Date.now();
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
+      const providerToUse = globalProvider || hre.ethers.provider;
       const [pending, latest] = await Promise.all([
-        hre.ethers.provider.getTransactionCount(addr, 'pending'),
-        hre.ethers.provider.getTransactionCount(addr, 'latest'),
+        providerToUse.getTransactionCount(addr, 'pending'),
+        providerToUse.getTransactionCount(addr, 'latest'),
       ]);
       if (pending <= latest) return;
       if (Date.now() - start > maxMs) return;
@@ -155,6 +161,9 @@ async function main() {
   const networkName = 'kaspaTestnet';
   const provider = new hre.ethers.JsonRpcProvider(rpc, { name: networkName, chainId });
   const wallet = new hre.ethers.Wallet(PRIVATE_KEY, provider);
+
+  // Expose the provider globally so helper functions (waitForQueue) use it.
+  globalProvider = provider;
 
   console.log('[DEPLOY] Network RPC:', rpc);
   console.log('[DEPLOY] Deployer:', wallet.address);
