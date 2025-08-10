@@ -30,7 +30,6 @@
 require('dotenv').config();
 const hre = require('hardhat');
 const fs = require('fs');
-const path = require('path');
 
 // Helper: ensure a hex string has a 0x prefix
 function ensure0x(h) {
@@ -72,21 +71,15 @@ async function withQueueRetries(fn, label) {
   }
 }
 
-// Wait until the txpool queue for the account empties out. Uses either
-// the custom provider (globalProvider) or Hardhat’s provider if none is
-// defined. We cannot rely on hre.ethers.provider directly because some
-// RPCs (e.g. kasplex) return 502 for net_version and Hardhat will throw.
-let globalProvider;
-
+// Wait until the txpool queue for the account empties out
 async function waitForQueue(addr, maxMs = 120000) {
   const start = Date.now();
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
-      const providerToUse = globalProvider || hre.ethers.provider;
       const [pending, latest] = await Promise.all([
-        providerToUse.getTransactionCount(addr, 'pending'),
-        providerToUse.getTransactionCount(addr, 'latest'),
+        hre.ethers.provider.getTransactionCount(addr, 'pending'),
+        hre.ethers.provider.getTransactionCount(addr, 'latest'),
       ]);
       if (pending <= latest) return;
       if (Date.now() - start > maxMs) return;
@@ -148,44 +141,11 @@ async function main() {
 
   await hre.run('compile');
 
-  // -------------------------------------------------------------------------
-  // Provider & Wallet
-  //
-  // Construct a raw JSON-RPC provider rather than using Hardhat’s provider. When
-  // Hardhat initialises its provider it attempts to query net_version on the
-  // RPC, which may return 502 (Bad Gateway) and throw HH110. By instantiating
-  // our own provider directly, we avoid this initial network call. We still
-  // leverage Hardhat for compilation and artifact reading.
-  const rpc = process.env.RPC_URL || 'https://rpc.kasplextest.xyz';
-  const chainId = 167012;
-  const networkName = 'kaspaTestnet';
-  const provider = new hre.ethers.JsonRpcProvider(rpc, { name: networkName, chainId });
+  const provider = hre.ethers.provider;
   const wallet = new hre.ethers.Wallet(PRIVATE_KEY, provider);
 
-  // Expose the provider globally so helper functions (waitForQueue) use it.
-  globalProvider = provider;
-
-  console.log('[DEPLOY] Network RPC:', rpc);
+  console.log('[DEPLOY] Network:', hre.network.name);
   console.log('[DEPLOY] Deployer:', wallet.address);
-
-  // -------------------------------------------------------------------------
-  // Load compiled contract artifacts directly. This avoids using
-  // hre.ethers.getContractFactory(), which internally touches the Hardhat
-  // provider and can error out if the RPC is misbehaving. The artifacts
-  // reside in artifacts/contracts/<file>/<contract>.json after `npx hardhat compile`.
-  const arbArtifactPath = path.join(__dirname, '..', 'artifacts', 'contracts', 'SimpleArbitrator.sol', 'SimpleArbitrator.json');
-  const oracleArtifactPath = path.join(__dirname, '..', 'artifacts', 'contracts', 'KasOracle.sol', 'KasOracle.json');
-  let arbArtifact, oracleArtifact;
-  try {
-    arbArtifact = JSON.parse(fs.readFileSync(arbArtifactPath, 'utf8'));
-    oracleArtifact = JSON.parse(fs.readFileSync(oracleArtifactPath, 'utf8'));
-  } catch (e) {
-    throw new Error('Could not read contract artifacts. Run `npm run compile` before deploy.');
-  }
-
-  // Create contract factories bound to our wallet
-  const ArbitFactoryRaw = new hre.ethers.ContractFactory(arbArtifact.abi, arbArtifact.bytecode, wallet);
-  const OracleFactoryRaw = new hre.ethers.ContractFactory(oracleArtifact.abi, oracleArtifact.bytecode, wallet);
 
   // Determine owner
   const owner = OWNER || wallet.address;
@@ -203,11 +163,9 @@ async function main() {
     arbitratorAddress = ensure0x(overrideArbRaw);
     console.log(`[DEPLOY] ⚠️ Using override for SimpleArbitrator: ${arbitratorAddress}`);
   } else {
-    // Use the raw factory loaded from artifacts. This factory is already
-    // connected to our wallet (see initialization above), so there is no need
-    // to call `.connect`.
-    const ArbitFactory = ArbitFactoryRaw;
-    const Arbit = ArbitFactory;
+    // Get factory and connect to wallet
+    const ArbitFactory = await hre.ethers.getContractFactory('SimpleArbitrator');
+    const Arbit = ArbitFactory.connect(wallet);
 
     // Precalculate nonce to compute predicted address
     await waitForQueue(wallet.address);
@@ -256,9 +214,8 @@ async function main() {
     oracleAddress = ensure0x(overrideOracleRaw);
     console.log(`[DEPLOY] ⚠️ Using override for KasOracle: ${oracleAddress}`);
   } else {
-    // Use the raw factory loaded from artifacts. Already connected to wallet.
-    const OracleFactory = OracleFactoryRaw;
-    const Oracle = OracleFactory;
+    const OracleFactory = await hre.ethers.getContractFactory('KasOracle');
+    const Oracle = OracleFactory.connect(wallet);
     // Wait for queue and compute predicted address
     await waitForQueue(wallet.address);
     const nonce2 = await provider.getTransactionCount(wallet.address, 'pending');
@@ -300,10 +257,10 @@ async function main() {
   // If we deployed both contracts (no override), wire arbitrator to oracle
   if (!overrideArbRaw || !overrideOracleRaw) {
     console.log('[DEPLOY] Wiring arbitrator to oracle...');
-    // Build call to setOracle(oracleAddress) using the ABI loaded from
-    // artifacts. Avoids Hardhat provider queries. ArbitFactoryRaw.interface
-    // exposes encodeFunctionData.
-    const data = ArbitFactoryRaw.interface.encodeFunctionData('setOracle', [oracleAddress]);
+    // Build call to setOracle(oracleAddress)
+    const ArbitFactory = await hre.ethers.getContractFactory('SimpleArbitrator');
+    const arbInterface = ArbitFactory.interface;
+    const data = arbInterface.encodeFunctionData('setOracle', [oracleAddress]);
     // Build transaction
     await waitForQueue(wallet.address);
     const nonce3 = await provider.getTransactionCount(wallet.address, 'pending');
@@ -338,7 +295,7 @@ async function main() {
 
   // Write deployments.json
   const deploymentData = {
-    network: networkName,
+    network: hre.network.name,
     deployedAt: new Date().toISOString(),
     owner: owner,
     bondToken: BOND_TOKEN,

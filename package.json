@@ -5,7 +5,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "compile": "hardhat compile",
-    "deploy": "node scripts/deploy.js"
+    "deploy": "hardhat run scripts/deploy.js --network kaspaTestnet"
   },
   "engines": {
     "node": "20.x"
