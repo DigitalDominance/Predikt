@@ -25,7 +25,11 @@ contract KasOracle is ReentrancyGuard, Ownable2Step {
     IERC20 public immutable bondToken;      // e.g., stable or WKAS-ERC20
     IArbitrator public arbitrator;          // pluggable arbitrator
     address public feeSink;                 // treasury / multisig
-    uint256 public feeBps = 200;            // 2% protocol fee
+    uint256 public feeBps = 200;
+
+    // Fee (in bondToken units) required to create a public question
+    uint256 public questionFee = 100 ether; // default 100 tokens (assumes 18 decimals; owner can adjust)
+    event QuestionFeeUpdated(uint256 amount);            // 2% protocol fee
     uint256 public minBaseBond = 1e18;      // minimum base bond (default 1 token)
     uint256 public escalationBond = 1e17;   // 0.1 token by default
     bool    public paused;                  // circuit breaker for new actions
@@ -116,7 +120,13 @@ contract KasOracle is ReentrancyGuard, Ownable2Step {
 
     /* ------------------------------- Admin funcs ----------------------------- */
 
-    function setFeeSink(address _sink) external onlyOwner {
+    
+    function setQuestionFee(uint256 amt) external onlyOwner {
+        // amt is specified in smallest units of bondToken
+        questionFee = amt;
+        emit QuestionFeeUpdated(amt);
+    }
+function setFeeSink(address _sink) external onlyOwner {
         require(_sink != address(0), "zero sink");
         feeSink = _sink;
         emit FeeSinkUpdated(_sink);
@@ -180,7 +190,8 @@ contract KasOracle is ReentrancyGuard, Ownable2Step {
         require(p.maxRounds >= 1 && p.maxRounds <= MAX_MAX_ROUNDS, "bad maxRounds");
         if (p.qtype == QuestionType.CATEGORICAL) require(p.options >= 2 && p.options <= 256, "bad options");
         if (p.qtype == QuestionType.SCALAR) require(p.scalarMin < p.scalarMax, "bad scalar range");
-        require(p.openingTs <= block.timestamp + 365 days, "opening too far");
+        require(p.openingTs >= block.timestamp + 1 hours, "opening too soon");
+        require(p.openingTs <= block.timestamp + (365 days * 5), "opening too far");
 
         id = computeQuestionId(p, salt);
         Question storage q = questions[id];
@@ -192,6 +203,40 @@ contract KasOracle is ReentrancyGuard, Ownable2Step {
 
         emit QuestionCreated(id, p);
     }
+
+    /// @notice Public create: anyone can create a question by paying `questionFee` in bondToken.
+    /// Uses same validation bounds as owner create.
+    function createQuestionPublic(QuestionParams calldata p, bytes32 salt)
+        external
+        notPaused
+        nonReentrant
+        returns (bytes32 id)
+    {
+        require(p.timeout >= 5 minutes && p.timeout <= 7 days, "bad timeout");
+        require(p.bondMultiplier >= MIN_BOND_MULTIPLIER && p.bondMultiplier <= MAX_BOND_MULTIPLIER, "bad multiplier");
+        require(p.maxRounds >= 1 && p.maxRounds <= MAX_MAX_ROUNDS, "bad maxRounds");
+        if (p.qtype == QuestionType.CATEGORICAL) require(p.options >= 2 && p.options <= 256, "bad options");
+        if (p.qtype == QuestionType.SCALAR) require(p.scalarMin < p.scalarMax, "bad scalar range");
+        require(p.openingTs >= block.timestamp + 1 hours, "opening too soon");
+        require(p.openingTs <= block.timestamp + (365 days * 5), "opening too far");
+
+        // Take fee
+        uint256 fee = questionFee;
+        if (fee > 0) {
+            bondToken.safeTransferFrom(msg.sender, feeSink, fee);
+        }
+
+        id = computeQuestionId(p, salt);
+        Question storage q = questions[id];
+        require(q.status == Status.NONE, "exists");
+
+        q.status = Status.OPEN;
+        q.params = p;
+        q.lastActionTs = uint64(block.timestamp);
+
+        emit QuestionCreated(id, p);
+    }
+
 
     /* --------------------------- Commit → Reveal Flow ------------------------ */
 
